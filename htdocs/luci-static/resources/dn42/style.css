@@ -1,0 +1,26 @@
+.dn42-page .dn42-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:0 0 18px}
+.dn42-page .dn42-toolbar h2{margin:0!important}
+.dn42-page .dn42-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:14px 0}
+.dn42-page .dn42-actions .btn,.dn42-page .dn42-toolbar .btn{margin:0;float:none;min-height:36px;white-space:nowrap}
+.dn42-page .dn42-actions input{flex:1 1 260px;min-width:0;max-width:560px;margin:0}
+.dn42-page .dn42-table-scroll{overflow-x:auto;margin:14px 0}
+.dn42-page .dn42-table-scroll .table{margin:0;width:100%}
+.dn42-page .dn42-connections{min-width:960px}
+.dn42-page .dn42-connections .th,.dn42-page .dn42-connections .td{vertical-align:middle;text-align:left;padding:12px}
+.dn42-page .dn42-fields .td:first-child{width:28%;min-width:130px;font-weight:500}
+.dn42-page .dn42-fields .td{vertical-align:top;text-align:left;padding:10px 12px;overflow-wrap:anywhere}
+.dn42-page details{margin:14px 0;padding:12px 14px;border:1px solid rgba(128,128,128,.22);border-radius:6px}
+.dn42-page summary{cursor:pointer;font-weight:500;line-height:1.5}
+.dn42-page pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:480px;overflow:auto;margin:12px 0 0}
+.dn42-page .dn42-card{padding:18px;margin:18px 0;border:1px solid rgba(128,128,128,.18);border-radius:8px}
+.dn42-page .dn42-card>h3:first-child{margin-top:0}
+.dn42-page .dn42-muted{opacity:.75;line-height:1.7}
+@media(max-width:600px){.dn42-page .dn42-toolbar{align-items:flex-start}.dn42-page .dn42-actions .btn{flex:1 1 auto}.dn42-page .dn42-card{padding:12px}.dn42-page .dn42-fields .td:first-child{min-width:96px}.dn42-page .dn42-actions input{max-width:none}}
+
+/* Argon changes .tr into flex rows and hides headers at its responsive breakpoint. */
+.dn42-page table.dn42-data{display:table;table-layout:auto;border-collapse:collapse;width:100%}
+.dn42-page table.dn42-data .tr,.dn42-page table.dn42-data .tr.table-titles{display:table-row}
+.dn42-page table.dn42-data .td,.dn42-page table.dn42-data .th{display:table-cell;float:none;text-align:left}
+.dn42-page table.dn42-connections .th,.dn42-page table.dn42-connections .td:nth-child(-n+7){white-space:nowrap;overflow-wrap:normal}
+.dn42-page table.dn42-data .td::before{display:none}
+.dn42-page .dn42-toolbar h2{flex:1 1 240px}
