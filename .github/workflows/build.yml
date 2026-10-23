@@ -1,0 +1,78 @@
+name: Build OpenWrt package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+    paths-ignore:
+      - "README.md"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    env:
+      OPENWRT_RELEASE: 24.10.4
+      OPENWRT_TARGET: x86/64
+
+    steps:
+      - name: Checkout package source
+        uses: actions/checkout@v4
+        with:
+          path: package-source
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gettext git \
+            libncurses-dev libssl-dev python3-setuptools rsync unzip \
+            zlib1g-dev file wget zstd
+
+      - name: Download OpenWrt SDK
+        run: |
+          base_url="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}"
+          sdk_file="$(wget -qO- "${base_url}/" \
+            | grep -oE 'openwrt-sdk-[^" ]+\.tar\.zst' \
+            | head -n1)"
+          test -n "$sdk_file"
+          wget -q --show-progress "${base_url}/${sdk_file}"
+          mkdir openwrt-sdk
+          tar --zstd -xf "$sdk_file" -C openwrt-sdk --strip-components=1
+
+      - name: Build luci-app-dn42
+        working-directory: openwrt-sdk
+        run: JOBS="$(nproc)" sh ../package-source/scripts/sdk-build.sh ../package-source
+
+      - name: Collect package
+        run: |
+          mkdir -p artifacts
+          find openwrt-sdk/bin/packages -type f \
+            \( -name 'luci-app-dn42_*.ipk' -o -name 'luci-app-dn42-*.apk' \) \
+            -exec cp -v {} artifacts/ \;
+          test -n "$(find artifacts -type f -print -quit)"
+
+      - name: Publish package to latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" \
+              -f sha="${GITHUB_SHA}" -F force=true
+            gh release upload latest artifacts/* --clobber
+            gh release edit latest --title "Latest build" --notes "Built from ${GITHUB_SHA}."
+          else
+            gh release create latest artifacts/* \
+              --target "${GITHUB_SHA}" \
+              --title "Latest build" \
+              --notes "Built from ${GITHUB_SHA}."
+          fi
