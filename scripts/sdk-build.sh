@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run from the root of a disposable Linux OpenWrt SDK.
+# Run from the root of a dedicated Linux OpenWrt SDK.
 set -eu
 source_dir=${1:-/src}
 jobs=${JOBS:-2}
@@ -32,13 +32,24 @@ cp -R "$source_dir/root" "$source_dir/htdocs" "$package/"
 # The source Makefile normally lives under feeds/luci/applications/.
 sed 's@include ../../luci.mk@include $(TOPDIR)/feeds/luci/luci.mk@' \
     "$source_dir/Makefile" > "$package/Makefile"
+if [ -n "${PACKAGE_VERSION:-}" ]; then
+    case "$PACKAGE_VERSION" in
+        *[!0-9.]*|.*|*.) echo 'PACKAGE_VERSION must contain dot-separated numbers' >&2; exit 1 ;;
+    esac
+    sed -i "/^LUCI_TITLE:=/i PKG_VERSION:=$PACKAGE_VERSION\\nPKG_RELEASE:=1" "$package/Makefile"
+fi
 touch .config
 sed '/^CONFIG_ALL[=_]/d; /^# CONFIG_ALL[ _]/d; /^CONFIG_PACKAGE_luci-app-dn42=/d; /^# CONFIG_PACKAGE_luci-app-dn42 is not set$/d' .config > .config.dn42
+# Disable optional minifiers so packaging needs no extra host tools.
+sed -i '/^CONFIG_LUCI_\(JSMIN\|CSSTIDY\|SRCDIET\)=/d; /^# CONFIG_LUCI_\(JSMIN\|CSSTIDY\|SRCDIET\) is not set$/d' .config.dn42
 cat >> .config.dn42 <<'EOF'
 # CONFIG_ALL is not set
 # CONFIG_ALL_NONSHARED is not set
 # CONFIG_ALL_KMODS is not set
 CONFIG_PACKAGE_luci-app-dn42=m
+# CONFIG_LUCI_JSMIN is not set
+# CONFIG_LUCI_CSSTIDY is not set
+# CONFIG_LUCI_SRCDIET is not set
 EOF
 mv .config.dn42 .config
 make defconfig
@@ -49,7 +60,9 @@ grep -Eq '^CONFIG_PACKAGE_luci-app-dn42=[my]$' .config || {
     grep -E 'luci-app-dn42|^CONFIG_(MODULES|ALL|ALL_NONSHARED|ALL_KMODS)=' .config >&2 || true
     exit 1
 }
-make -j"$jobs" package/luci-app-dn42/compile V=s
+# This source-only LuCI package has no linked libraries to build.
+# Keep runtime dependency metadata, but skip recursive dependency compilation.
+make -j"$jobs" package/luci-app-dn42/compile V=s NO_DEPS=1
 packages=$(find bin -type f \( -name 'luci-app-dn42*.ipk' -o -name 'luci-app-dn42*.apk' \))
 [ -n "$packages" ] || {
     echo 'Build finished without producing a luci-app-dn42 package.' >&2

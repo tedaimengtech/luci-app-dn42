@@ -33,7 +33,7 @@ iBGP 使用现有 `OWNAS`、`is_valid_network()`、`is_valid_network_v6()`、`dn
 
 ### GitHub Actions
 
-推送到 `main` / `master` 分支、推送 `v*` 标签或手动运行 `Build OpenWrt package` workflow，即可使用 OpenWrt 24.10.4 的 x86/64 SDK 编译插件。仅修改 `README.md` 时不触发自动构建。构建成功后，安装包会上传到仓库的 `latest` Release，并覆盖同名文件。
+推送到 `main` / `master` 分支或手动运行 `Build OpenWrt package` workflow，会并行使用 OpenWrt 24.10.4 SDK 生成 IPK、OpenWrt 25.12.6 SDK 生成 APK。仅修改 `README.md` 时不触发自动构建。两种格式全部成功后发布到同一个新 Release，按北京时间生成 `v年.月.日.时分秒.RUN_ID.RUN_ATTEMPT` 标签，安装包使用相同时间版本；保留历史 Release。
 
 Workflow 会缓存已准备好的 SDK、feeds 和依赖；命中缓存后直接复制当前源码并编译。需要刷新 SDK 或 feeds 时，递增 `.github/workflows/build.yml` 中的 `SDK_CACHE_VERSION`。每次构建的安装包也会保存在 Actions Artifacts 中。
 
@@ -47,7 +47,7 @@ Workflow 会缓存已准备好的 SDK、feeds 和依赖；命中缓存后直接�
 
 首次运行下载 OpenWrt 24.10.4 x86/64 SDK 并准备 feeds，后续复用。使用 `OPENWRT_DIR` 可指定其他专用 SDK 目录。构建需要 OpenWrt SDK 所需的本机开发工具与库。切换 SDK 版本或目标时应使用独立目录。
 
-安装包位于 `../openwrt/bin/packages/`。修改源码后再次运行脚本，会更新 SDK 内的插件源码并重新编译。
+安装包位于 `../openwrt/bin/packages/`。修改源码后再次运行脚本，会更新 SDK 内的插件源码并重新编译。本地与 workflow 均使用 `NO_DEPS=1`，只打包本插件，不编译运行依赖；安装包保留依赖声明，由设备包管理器安装对应依赖。为避免额外构建宿主工具，关闭了可选源码压缩。
 
 ### 手动构建
 

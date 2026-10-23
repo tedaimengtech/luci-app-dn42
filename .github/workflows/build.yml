@@ -6,8 +6,6 @@ on:
     branches:
       - main
       - master
-    tags:
-      - "v*"
     paths-ignore:
       - "README.md"
 
@@ -19,17 +17,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      package_version: ${{ steps.version.outputs.package_version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Generate time-based version
+        id: version
+        run: |
+          timestamp="$(TZ=Asia/Shanghai date +'%Y.%m.%d.%H%M%S')"
+          version="${timestamp}.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          echo "package_version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release: 24.10.4
+            format: ipk
+          - release: 25.12.6
+            format: apk
+    name: Build ${{ matrix.format }} (OpenWrt ${{ matrix.release }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    permissions:
-      contents: write
-
     env:
-      OPENWRT_RELEASE: 24.10.4
+      OPENWRT_RELEASE: ${{ matrix.release }}
+      PACKAGE_FORMAT: ${{ matrix.format }}
+      PACKAGE_VERSION: ${{ needs.version.outputs.package_version }}
       OPENWRT_TARGET: x86/64
       # Bump to rebuild the SDK and refresh all feeds.
-      SDK_CACHE_VERSION: 1
+      SDK_CACHE_VERSION: 2
 
     steps:
       - name: Checkout package source
@@ -86,30 +107,39 @@ jobs:
         run: |
           mkdir -p artifacts
           find openwrt-sdk/bin/packages -type f \
-            \( -name 'luci-app-dn42_*.ipk' -o -name 'luci-app-dn42-*.apk' \) \
+            -name "luci-app-dn42*.${PACKAGE_FORMAT}" \
             -exec cp -v {} artifacts/ \;
           test -n "$(find artifacts -type f -print -quit)"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-dn42-${{ github.run_id }}-${{ github.run_attempt }}
+          name: luci-app-dn42-${{ matrix.format }}-${{ needs.version.outputs.tag }}
           path: artifacts/*
           if-no-files-found: error
 
-      - name: Publish package to latest release
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download both package formats
+        uses: actions/download-artifact@v4
+        with:
+          pattern: luci-app-dn42-*-${{ needs.version.outputs.tag }}
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish time-based release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
-          if gh release view latest >/dev/null 2>&1; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" \
-              -f sha="${GITHUB_SHA}" -F force=true
-            gh release upload latest artifacts/* --clobber
-            gh release edit latest --title "Latest build" --notes "Built from ${GITHUB_SHA}."
-          else
-            gh release create latest artifacts/* \
-              --target "${GITHUB_SHA}" \
-              --title "Latest build" \
-              --notes "Built from ${GITHUB_SHA}."
-          fi
+          test -n "$(find artifacts -type f -name '*.ipk' -print -quit)"
+          test -n "$(find artifacts -type f -name '*.apk' -print -quit)"
+          gh release create "$RELEASE_TAG" artifacts/* \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TAG" \
+            --generate-notes
