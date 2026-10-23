@@ -1,0 +1,105 @@
+#!/usr/bin/lua
+local json=require('luci.jsonc')
+local uci=require('uci').cursor()
+local function quote(s) return "'"..tostring(s):gsub("'","'\\''").."'" end
+local function run(s) local f=assert(io.popen('('..s..') 2>&1; printf \"\\n__DN42_EXIT_%s\\n\" \"$?\"'));local out=f:read('*a');f:close();local code=out:match('__DN42_EXIT_(%d+)\n$');out=out:gsub('\n__DN42_EXIT_%d+\n$','');return out,code=='0' end
+local function read(p) local f=io.open(p);if not f then return nil end;local s=f:read('*a');f:close();return s end
+local function write(p,s) local f=assert(io.open(p,'w'));f:write(s);f:close() end
+local function id(s) return type(s)=='string' and s:match('^[a-zA-Z][a-zA-Z0-9_]*$') and #s<=15 end
+local function list(v) if type(v)=='table' then return v elseif v and v~='' then return {v} else return {} end end
+local function peer(name) assert(id(name),'无效连接名称');local p=uci:get_all('dn42',name);assert(p and p['.type']=='peer','连接不存在');assert(id(p.iface),'接口名必须字母开头，最多 15 字符');return p end
+local function checked(s) local out,ok=run(s);assert(ok,out);return out end
+local function ip(s,v6) assert(type(s)=='string' and not s:find('[^%x:%.%/]'),'无效地址');assert(s:find(v6 and ':' or '%.'),'地址族错误');return s end
+local function prefixes(v,v6) local t={};for _,s in ipairs(list(v)) do ip(s,v6);assert(s:find('/'),'必须填写前缀长度');t[#t+1]=s end;return #t>0 and ('net ~ [ '..table.concat(t,', ')..' ]') or 'false' end
+local function protocols() return run('birdc show protocols') end
+local function wg(iface) return run('wg show '..quote(iface)) end
+local function apply(name,dryrun)
+ local p=peer(name);assert(p.kind=='ebgp' or p.kind=='ibgp','无效连接类型');assert(tonumber(p.asn) and tonumber(p.asn)%1==0 and tonumber(p.asn)>0 and tonumber(p.asn)<=4294967295,'无效 ASN');
+ assert(p.public_key and p.public_key:match('^[A-Za-z0-9+/]+=*$') and #p.public_key==44,'无效 WireGuard 公钥');
+ for _,k in ipairs({'private_key','preshared_key'}) do if p[k] and p[k]~='' then assert(p[k]:match('^[A-Za-z0-9+/]+=*$') and #p[k]==44,'无效密钥') end end
+ assert(p.local_lla and p.local_lla:lower():match('^fe[89ab]%x:'), '本地地址必须是 LLA');ip(p.local_lla,true);assert(not p.local_lla:find('/'),'LLA 不填写掩码')
+ assert(p.remote_lla and p.remote_lla:lower():match('^fe[89ab]%x:'), '远端地址必须是 LLA');ip(p.remote_lla,true);assert(not p.remote_lla:find('/'),'LLA 不填写掩码')
+ for _,k in ipairs({'listen_port','endpoint_port'}) do if p[k] and p[k]~='' then local n=tonumber(p[k]);assert(n and n%1==0 and n>=1 and n<=65535,'无效端口') end end
+ if p.endpoint and p.endpoint~='' then assert(p.endpoint:match('^[%w%.:%-]+$') and p.endpoint_port and p.endpoint_port~='','Endpoint 必须包含端口') end
+ local zone;uci:foreach('firewall','zone',function(z) if z.name==p.zone then zone=z['.name'] end end);assert(zone,'防火墙区域不存在')
+ assert(p.ipv4=='1' or p.ipv6=='1','至少启用一个地址族')
+ checked("test -z \"$(uci changes network)$(uci changes firewall)\"")
+ uci:foreach('network','interface',function(n) if n.dn42_owner==name then assert(n['.name']==p.iface,'已应用连接不支持改接口名，请删除后重建') end end)
+ for _,prefix in ipairs({'dn42bgp_','dn42icmp_','dn42udp_'}) do local rule=prefix..name;assert(not uci:get('firewall',rule) or uci:get('firewall',rule,'dn42_owner')==name,'防火墙配置名称已被占用') end
+ local existing=uci:get('network',p.iface);assert(not existing or uci:get('network',p.iface,'dn42_owner')==name,'接口属于手工配置或其他连接')
+ uci:foreach('dn42','peer',function(q) if q['.name']~=name then assert(q.iface~=p.iface,'接口名称重复');if p.listen_port and p.listen_port~='' then assert(q.listen_port~=p.listen_port,'本地端口重复') end end end)
+ local tpl=uci:get('dn42','settings',p.transit=='1' and 'transit_template' or 'normal_template');assert(type(tpl)=='string' and tpl:match('^[%a_][%w_]*$') and #tpl<=64,'无效模板名称')
+ local main=uci:get('dn42','settings','bird_conf') or '/etc/bird.conf';assert(main=='/etc/bird.conf','第一版仅支持 /etc/bird.conf')
+ local dir=p.kind=='ibgp' and '/etc/bird/ibgp/' or '/etc/bird/peers/'
+ local conf=read(main) or '';assert(conf:find(dir,1,true),'主配置没有 include '..dir..'，请先添加')
+ assert(not read((p.kind=='ibgp' and '/etc/bird/peers/' or '/etc/bird/ibgp/')..'dn42_'..name..'.conf'),'已应用连接不能改变类型，请删除后重建')
+ local protocol='dn42_'..name;local text='# managed by luci-app-dn42\nprotocol bgp '..protocol
+ if p.kind=='ebgp' then text=text..' from '..tpl end
+ text=text..' {\n  neighbor '..p.remote_lla..'%'..p.iface..' as '..p.asn..';\n  interface "'..p.iface..'";\n  source address '..p.local_lla..';\n  direct;\n  disabled '..(p.enabled=='1' and 'off' or 'on')..';\n'
+ if p.kind=='ibgp' then text=text..'  local as OWNAS;\n'..(p.rr_client=='1' and '  rr client;\n' or '') end
+ for _,v in ipairs({4,6}) do if p['ipv'..v]=='1' then
+ text=text..'  ipv'..v..' {\n'..(v==4 and '    extended next hop on;\n    require extended next hop on;\n' or '')..'    next hop self;\n    next hop address '..p.local_lla..';\n'
+ if p.kind=='ibgp' then
+ local filter=prefixes(p['internal'..v],v==6);local valid=v==4 and 'is_valid_network()' or 'is_valid_network_v6()';local roa=v==4 and 'dn42_roa' or 'dn42_roa_v6'
+ text=text..'    import filter {\n      if ('..filter..') && bgp_path.len = 0 then accept;\n      if '..valid..' && bgp_path.len > 0 then { if roa_check('..roa..', net, bgp_path.last) = ROA_VALID then accept; }\n      reject;\n    };\n    export filter {\n      if ('..filter..') && source ~ [RTS_DEVICE, RTS_STATIC, RTS_BGP] then accept;\n      if '..valid..' && source = RTS_BGP then accept;\n      reject;\n    };\n'
+ end
+ text=text..'  };\n'
+ elseif p.kind=='ebgp' then text=text..'  ipv'..v..' { import none; export none; };\n' end end
+ text=text..'}\n'
+ if dryrun then return {ok=true,message=text..'\nUCI: interface '..p.iface..' / zone '..p.zone..' / route_allowed_ips=0\n应用不会创建 SNAT 或修改 DHCP。'} end
+ checked('mkdir -p '..quote(dir));local path=dir..protocol..'.conf';local old=read(path);assert(not old or old:find('# managed by luci-app-dn42',1,true),'同名 BIRD 文件不属于插件');local oldnet=assert(read('/etc/config/network'));local oldfw=assert(read('/etc/config/firewall'))
+ local function rollback() write('/etc/config/network',oldnet);write('/etc/config/firewall',oldfw);if old then write(path,old) else os.remove(path) end;run('uci revert network');run('uci revert firewall');run('ubus call network reload');run('/etc/init.d/firewall reload');run('birdc configure') end
+ local ok,err=pcall(function()
+ local key=p.private_key;if not key or key=='' then key=uci:get('network',p.iface,'private_key') or checked('wg genkey'):gsub('%s+$','') end
+ local iface=p.iface;uci:delete('network',iface);uci:set('network',iface,'interface');uci:set('network',iface,'proto','wireguard');uci:set('network',iface,'private_key',key);uci:set('network',iface,'dn42_owner',name)
+ local addrs={p.local_lla..'/64'};for _,a in ipairs(list(p.addresses)) do assert(a:match('^[%x:%.]+/%d+$'),'无效接口地址');addrs[#addrs+1]=a end;uci:set('network',iface,'addresses',addrs)
+ if p.listen_port and p.listen_port~='' then uci:set('network',iface,'listen_port',p.listen_port) end
+ assert(tonumber(p.mtu or '1420') and tonumber(p.mtu or '1420')>=1280 and tonumber(p.mtu or '1420')<=9000,'无效 MTU');assert(tonumber(p.keepalive or '25') and tonumber(p.keepalive or '25')>=0 and tonumber(p.keepalive or '25')<=65535,'无效保活时间');uci:set('network',iface,'mtu',p.mtu or '1420');uci:set('network',iface,'auto',p.enabled=='1' and '1' or '0')
+ local sec='dn42p_'..name;uci:delete('network',sec);uci:set('network',sec,'wireguard_'..iface);uci:set('network',sec,'public_key',p.public_key);uci:set('network',sec,'route_allowed_ips','0');uci:set('network',sec,'persistent_keepalive',p.keepalive or '25')
+ if p.preshared_key and p.preshared_key~='' then uci:set('network',sec,'preshared_key',p.preshared_key) end
+ if p.endpoint and p.endpoint~='' then uci:set('network',sec,'endpoint_host',p.endpoint);uci:set('network',sec,'endpoint_port',p.endpoint_port) end
+ local allowed=list(p.allowed_ips);if #allowed==0 then allowed={'172.20.0.0/14','172.31.0.0/16','10.0.0.0/8','fd00::/8'} end
+ for _,a in ipairs(allowed) do assert(a:match('^[%x:%.]+/%d+$'),'无效 AllowedIPs') end;allowed[#allowed+1]=p.remote_lla..'/128';uci:set('network',sec,'allowed_ips',allowed)
+ uci:foreach('firewall','zone',function(z) if z['.name']~=zone then local ns={};for _,n in ipairs(list(z.network)) do if n~=iface then ns[#ns+1]=n end end;uci:set('firewall',z['.name'],'network',ns) end end)
+ local nets=list(uci:get('firewall',zone,'network'));local found=false;for _,n in ipairs(nets) do if n==iface then found=true end end;if not found then nets[#nets+1]=iface end;uci:set('firewall',zone,'network',nets)
+ local icmp='dn42icmp_'..name;uci:delete('firewall',icmp);uci:set('firewall',icmp,'rule');uci:set('firewall',icmp,'dn42_owner',name);uci:set('firewall',icmp,'name','DN42 ICMPv6 '..name);uci:set('firewall',icmp,'src',p.zone);uci:set('firewall',icmp,'proto','icmp');uci:set('firewall',icmp,'family','ipv6');uci:set('firewall',icmp,'target','ACCEPT');uci:set('firewall',icmp,'src_ip',p.remote_lla)
+ local udp='dn42udp_'..name;uci:delete('firewall',udp);if p.listen_port and p.listen_port~='' and p.listen_zone and p.listen_zone~='' then local exists=false;uci:foreach('firewall','zone',function(z) if z.name==p.listen_zone then exists=true end end);assert(exists,'外层入站区域不存在');uci:set('firewall',udp,'rule');uci:set('firewall',udp,'dn42_owner',name);uci:set('firewall',udp,'name','DN42 WG '..name);uci:set('firewall',udp,'src',p.listen_zone);uci:set('firewall',udp,'proto','udp');uci:set('firewall',udp,'dest_port',p.listen_port);uci:set('firewall',udp,'target','ACCEPT') end
+ local rule='dn42bgp_'..name;uci:delete('firewall',rule);uci:set('firewall',rule,'rule');uci:set('firewall',rule,'dn42_owner',name);uci:set('firewall',rule,'name','DN42 BGP '..name);uci:set('firewall',rule,'src',p.zone);uci:set('firewall',rule,'proto','tcp');uci:set('firewall',rule,'dest_port','179');uci:set('firewall',rule,'target','ACCEPT');uci:set('firewall',rule,'family','ipv6');uci:set('firewall',rule,'src_ip',p.remote_lla)
+ write(path,text);checked('bird -p -c '..quote(main));assert(uci:commit('network'),'网络 UCI 提交失败');assert(uci:commit('firewall'),'防火墙 UCI 提交失败');checked('ubus call network reload');checked('/etc/init.d/firewall reload');local configured=checked('birdc configure');assert(configured:find('Reconfigured',1,true) or configured:find('Reconfiguration in progress',1,true),configured);if p.enabled=='1' then checked('ifup '..quote(iface)) else checked('ifdown '..quote(iface)) end
+ end)
+ if not ok then rollback();error(err) end
+ return {ok=true,message='连接已应用。使用现有模板；端点不可达不会自动回滚。'}
+end
+local methods={route={prefix='string'},diagnose={name='string'},status={},detail={name='string'},apply={name='string'},preview={name='string'},remove={name='string'},roa={},schedule={},action={name='string',operation='string'}}
+if arg[1]=='list' then print(json.stringify(methods));os.exit() end
+if arg[1]~='call' or not methods[arg[2]] then os.exit(1) end
+local input=json.parse(io.read('*a')) or {};local method=arg[2]
+local function dispatch()
+ if method=='route' then
+ local prefix=input.prefix;assert(type(prefix)=='string' and prefix:match('^[%x:%.]+/%d+$') and #prefix<80,'输入完整 IPv4/IPv6 前缀');local out,ok=run('birdc show route for '..quote(prefix)..' all');return {ok=ok,message=out}
+ elseif method=='diagnose' then local p=peer(input.name);return {ok=true,message=run('ip -6 addr show dev '..quote(p.iface))..'\n'..run('ping -6 -I '..quote(p.iface)..' -c 2 -W 2 '..quote(p.remote_lla))}
+ elseif method=='status' then local r={protocols=protocols(),roa=read('/etc/bird/.dn42-roa-last') or '尚无更新记录',roa_log=(read('/tmp/dn42-roa-result') or '')..'\n'..run('tail -n 30 /tmp/dn42-roa.log'),peers={}};uci:foreach('dn42','peer',function(p) r.peers[#r.peers+1]={name=p['.name'],asn=p.asn,label=p.label,iface=p.iface,wg=id(p.iface) and wg(p.iface) or '无效接口'} end);return r
+ elseif method=='detail' then local p=peer(input.name);return {bgp=run('birdc show protocols all '..quote('dn42_'..input.name)),wg=wg(p.iface)}
+ elseif method=='preview' then return apply(input.name,true)
+ elseif method=='remove' then
+ local p=peer(input.name);if not uci:get('network',p.iface) then assert(not read('/etc/bird/peers/dn42_'..input.name..'.conf') and not read('/etc/bird/ibgp/dn42_'..input.name..'.conf'),'遗留配置需人工处理');return {ok=true,message='草稿已删除'} end;assert(uci:get('network',p.iface,'dn42_owner')==input.name,'不是插件管理的接口');checked("test -z \"$(uci changes network)$(uci changes firewall)\"")
+
+ local net=assert(read('/etc/config/network'));local fw=assert(read('/etc/config/firewall'));local paths={'/etc/bird/peers/dn42_'..input.name..'.conf','/etc/bird/ibgp/dn42_'..input.name..'.conf'};local files={};for _,path in ipairs(paths) do files[path]=read(path);assert(not files[path] or files[path]:find('# managed by luci-app-dn42',1,true),'BIRD 文件不属于插件') end
+ local ok,err=pcall(function()
+ checked('ifdown '..quote(p.iface));uci:delete('network',p.iface);uci:delete('network','dn42p_'..input.name)
+ uci:foreach('firewall','zone',function(z) local nets={};for _,n in ipairs(list(z.network)) do if n~=p.iface then nets[#nets+1]=n end end;uci:set('firewall',z['.name'],'network',nets) end)
+ uci:delete('firewall','dn42bgp_'..input.name);uci:delete('firewall','dn42icmp_'..input.name);uci:delete('firewall','dn42udp_'..input.name);assert(uci:commit('network'),'网络 UCI 提交失败');assert(uci:commit('firewall'),'防火墙 UCI 提交失败');os.remove('/etc/bird/peers/dn42_'..input.name..'.conf');os.remove('/etc/bird/ibgp/dn42_'..input.name..'.conf');local output=checked('birdc configure');assert(output:find('Reconfigured',1,true) or output:find('Reconfiguration in progress',1,true),output);checked('/etc/init.d/firewall reload')
+ end)
+ if not ok then write('/etc/config/network',net);write('/etc/config/firewall',fw);for path,content in pairs(files) do write(path,content) end;run('uci revert network');run('uci revert firewall');run('ubus call network reload');run('/etc/init.d/firewall reload');run('birdc configure');error(err) end
+ return {ok=true,message='连接资源已删除'}
+
+ elseif method=='apply' then return apply(input.name)
+ elseif method=='roa' then checked('test ! -d /var/lock/dn42-roa-update');checked('nohup /usr/libexec/dn42/update-roa > /tmp/dn42-roa.log 2>&1 < /dev/null &');return {ok=true,message='ROA 更新已启动，结果可在状态页查看。'}
+ elseif method=='schedule' then local o,k=run('/usr/libexec/dn42/schedule');return {ok=k,message=o}
+ elseif method=='action' then peer(input.name);assert(input.operation=='reload' or input.operation=='enable' or input.operation=='disable','不支持的操作');local command=input.operation=='reload' and 'reload in' or input.operation;local o,k=run('birdc '..command..' '..quote('dn42_'..input.name));return {ok=k,message=o} end
+end
+-- Serialize all mutations; status remains available during downloads.
+local locked=false
+if method~='status' and method~='detail' and method~='preview' and method~='route' and method~='diagnose' then local _,ok=run('mkdir /var/lock/dn42-luci');if not ok then print(json.stringify({ok=false,message='另一项操作正在运行'}));os.exit() end;locked=true end
+local ok,result=pcall(dispatch);if locked then run('rmdir /var/lock/dn42-luci') end
+print(json.stringify(ok and result or {ok=false,message=tostring(result)}))

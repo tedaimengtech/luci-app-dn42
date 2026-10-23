@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+*.ipk
+*.apk
+bin/
+.cache/

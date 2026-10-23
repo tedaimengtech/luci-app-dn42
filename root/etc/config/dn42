@@ -1,0 +1,8 @@
+config global 'settings'
+ option bird_conf '/etc/bird.conf'
+ option normal_template 'dnpeers'
+ option transit_template 'dnpeers_transit'
+ option roa4_url 'https://dn42.burble.com/roa/dn42_roa_bird2_4.conf'
+ option roa6_url 'https://dn42.burble.com/roa/dn42_roa_bird2_6.conf'
+ option roa_auto '0'
+ option roa_minute '17'

@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+lock=/var/lock/dn42-roa-update
+mkdir "$lock" 2>/dev/null || { echo 'ROA 更新正在运行'; exit 1; }
+task_tmp=$(mktemp -d /tmp/dn42-roa.XXXXXX)
+installed=0
+cleanup() {
+ task_rc=$?
+ if [ "$installed" = 1 ] && [ "$task_rc" -ne 0 ]; then restore; fi
+ printf '%s exit=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$task_rc" > /tmp/dn42-roa-result
+ rm -rf "$task_tmp"; rmdir "$lock"
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+main=$(uci -q get dn42.settings.bird_conf || echo /etc/bird.conf)
+[ "$main" = /etc/bird.conf ] || { echo '主配置路径不支持'; exit 1; }
+for family in 4 6; do
+ url=$(uci -q get dn42.settings.roa${family}_url)
+ case "$url" in https://*) ;; *) echo 'ROA 来源必须为 HTTPS'; exit 1;; esac
+ curl -fsSL --connect-timeout 15 --max-time 60 "$url" -o "$task_tmp/v$family.conf"
+ [ -s "$task_tmp/v$family.conf" ]
+done
+# Validate included ROA files in isolation; do not execute downloaded scripts.
+cat > "$task_tmp/check.conf" <<EOF
+router id 192.0.2.1;
+roa4 table dn42_roa;
+roa6 table dn42_roa_v6;
+protocol static { roa4 { table dn42_roa; }; include "$task_tmp/v4.conf"; }
+protocol static { roa6 { table dn42_roa_v6; }; include "$task_tmp/v6.conf"; }
+EOF
+bird -p -c "$task_tmp/check.conf"
+if cmp -s "$task_tmp/v4.conf" /etc/bird/dn42_roa.conf && cmp -s "$task_tmp/v6.conf" /etc/bird/dn42_roa_v6.conf; then
+ echo 'ROA 无变化';date -u '+%Y-%m-%dT%H:%M:%SZ unchanged' > /etc/bird/.dn42-roa-last;exit 0
+fi
+cp /etc/bird/dn42_roa.conf "$task_tmp/old4"
+cp /etc/bird/dn42_roa_v6.conf "$task_tmp/old6"
+restore() {
+ cp "$task_tmp/old4" /etc/bird/dn42_roa.conf
+ cp "$task_tmp/old6" /etc/bird/dn42_roa_v6.conf
+ installed=0
+ birdc configure || true
+}
+installed=1
+cp "$task_tmp/v4.conf" /etc/bird/dn42_roa.conf
+cp "$task_tmp/v6.conf" /etc/bird/dn42_roa_v6.conf
+if ! bird -p -c "$main"; then restore;echo '配置校验失败，已恢复';exit 1;fi
+result=$(birdc configure 2>&1) || { restore;exit 1; }
+printf '%s\n' "$result"
+case "$result" in *Reconfigured*|*'Reconfiguration in progress'*) ;; *) restore;echo 'BIRD 应用失败，已恢复';exit 1;; esac
+installed=0
+birdc show protocols | awk '$2 == "BGP" && $4 == "up" {print $1}' | while read -r protocol;do birdc reload in "$protocol";done
+date -u '+%Y-%m-%dT%H:%M:%SZ updated' > /etc/bird/.dn42-roa-last
+logger -t dn42-roa 'ROA updated and BGP import reload requested'
+echo 'ROA 更新完成'

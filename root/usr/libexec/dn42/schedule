@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+file=/etc/crontabs/root
+mkdir -p /etc/crontabs
+touch "$file"
+if grep -v '# luci-app-dn42$' "$file" | grep -q 'update-roa';then
+ echo '发现已有 ROA 定时任务，请先移除或停用旧任务，避免重复更新';exit 1
+fi
+minute=$(uci -q get dn42.settings.roa_minute || echo 17)
+case "$minute" in ''|*[!0-9]*) exit 1;; esac
+[ "$minute" -le 59 ]
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+grep -v '# luci-app-dn42$' "$file" > "$tmp" || true
+if [ "$(uci -q get dn42.settings.roa_auto)" = 1 ];then
+ printf '%s * * * * /usr/libexec/dn42/update-roa >> /tmp/dn42-roa.log 2>&1 # luci-app-dn42\n' "$minute" >> "$tmp"
+fi
+cat "$tmp" > "$file"
+/etc/init.d/cron restart
+echo '定时任务已更新；现有 update-roa.sh 未修改'
