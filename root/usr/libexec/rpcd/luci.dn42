@@ -97,7 +97,7 @@ local function dispatch()
  return {ok=true,message='连接资源已删除'}
 
  elseif method=='apply' then return apply(input.name)
- elseif method=='roa' then checked('test ! -d /var/lock/dn42-roa-update');checked('nohup /usr/libexec/dn42/update-roa > /tmp/dn42-roa.log 2>&1 < /dev/null &');return {ok=true,message='ROA 更新已启动，结果可在状态页查看。'}
+ elseif method=='roa' then checked('test ! -d /var/lock/dn42-roa-update');checked('test -x /usr/libexec/dn42/update-roa');checked("sh -c 'trap \"\" HUP; exec /usr/libexec/dn42/update-roa' > /tmp/dn42-roa.log 2>&1 < /dev/null &");return {ok=true,message='ROA 更新已启动，结果可在状态页查看。'}
  elseif method=='schedule' then local o,k=run('/usr/libexec/dn42/schedule');return {ok=k,message=o}
  elseif method=='action' then peer(input.name);assert(input.operation=='reload' or input.operation=='enable' or input.operation=='disable','不支持的操作');local command=input.operation=='reload' and 'reload in' or input.operation;local o,k=run('birdc '..command..' '..quote('dn42_'..input.name));return {ok=k,message=o} end
 end

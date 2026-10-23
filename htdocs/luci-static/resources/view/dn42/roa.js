@@ -13,5 +13,5 @@ return view.extend({render:function(){
  s.option(form.Flag,'roa_auto','每小时自动更新');var o=s.option(form.Value,'roa_minute','每小时第几分钟');o.datatype='range(0,59)';
  o=s.option(form.Button,'schedule','应用定时设置');o.onclick=function(){return m.save().then(function(){return commit('dn42');}).then(schedule).then(function(r){ui.addNotification(null,E('pre',{},r.message));});};
  o=s.option(form.Button,'update','立即更新');o.onclick=function(){return m.save().then(function(){return commit('dn42');}).then(update).then(function(r){ui.addNotification(null,E('pre',{},r.message),r.ok?'info':'error');});};
- return m.render();
+ return Promise.resolve(m.render()).then(function(node){return E('div',{class:'dn42-page'},[E('link',{rel:'stylesheet',href:L.resource('dn42/style.css')}),node]);});
 }});

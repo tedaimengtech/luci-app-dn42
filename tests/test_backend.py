@@ -36,4 +36,24 @@ dofile(SOURCE)
 assert(#calls==2)
 """.replace('SOURCE',repr(source))
   r=subprocess.run(['lua','-'],input=script,text=True,capture_output=True);self.assertEqual(r.returncode,0,r.stderr);self.assertIn('OK',r.stdout)
+ def test_roa_launch_does_not_require_nohup(self):
+  source=str(ROOT/'root/usr/libexec/rpcd/luci.dn42')
+  script=r"""
+local calls={}
+package.preload['uci']=function()return {cursor=function()return {}end}end
+package.preload['luci.jsonc']=function()return {parse=function()return {}end,stringify=function(r)assert(r.ok,r.message);return r.message end}end
+io.read=function()return '{}' end
+io.popen=function(command)
+ calls[#calls+1]=command
+ assert(not command:find('nohup',1,true))
+ return {read=function()return '\n__DN42_EXIT_0\n' end,close=function()end}
+end
+arg={'call','roa'}
+dofile(SOURCE)
+assert(#calls==5)
+assert(calls[3]:find('test -x /usr/libexec/dn42/update-roa',1,true))
+assert(calls[4]:find('trap "" HUP; exec /usr/libexec/dn42/update-roa',1,true))
+assert(calls[4]:find('2>&1 < /dev/null &',1,true))
+""".replace('SOURCE',repr(source))
+  r=subprocess.run(['lua','-'],input=script,text=True,capture_output=True);self.assertEqual(r.returncode,0,r.stderr)
 if __name__=='__main__': unittest.main()
