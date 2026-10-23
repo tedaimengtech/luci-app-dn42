@@ -1,1 +1,1 @@
-{"luci-app-dn42":{"description":"Manage DN42 connections","read":{"uci":["dn42","firewall"],"ubus":{"luci.dn42":["status","detail","route","diagnose"]}},"write":{"uci":["dn42"],"ubus":{"luci.dn42":["apply","preview","remove","roa","schedule","action"]}}}}
+{"luci-app-dn42":{"description":"Manage DN42 connections","read":{"uci":["dn42","firewall"],"ubus":{"luci.dn42":["status","detail","route","interface_routes","diagnose"]}},"write":{"uci":["dn42"],"ubus":{"uci":["commit"],"luci.dn42":["apply","preview","remove","roa","schedule","action"]}}}}

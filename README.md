@@ -12,9 +12,11 @@ OpenWrt LuCI DN42 管理插件，首版源码。面向 BIRD 2 与每条连接独
 - 引用已有 `dnpeers` / `dnpeers_transit`，不会改变其策略。模板名称可配置。
 - eBGP 文件位于 `/etc/bird/peers/dn42_NAME.conf`，iBGP 位于 `/etc/bird/ibgp/dn42_NAME.conf`。
 - 应用前预览 BIRD 内容；检查完整 BIRD 配置，失败恢复旧文件和已提交的 UCI 配置。网络/防火墙有未提交修改时拒绝应用。
-- 按 ASN 分组，显示 BIRD 概况、详细会话信息、对应 WG Endpoint、握手及流量；10 秒刷新。可重载指定连接的导入策略。
+- 状态页按连接显示 BGP 状态、WG 握手和流量；点击连接名称进入详情，解析 BGP 会话、地址族通道与路由统计，以及 WG Endpoint、AllowedIPs、端口和流量。仅手动刷新，详情支持链接定位、按接口查询 IPv4/IPv6 内核路由，保留可展开的原始输出。显示 iBGP/eBGP、地址族、transit 模板与防火墙区域。可重载指定连接的导入策略。
 - ROA HTTPS 下载、锁、语法检查、完整配置检查、BIRD 重配置失败恢复、无变化跳过、BGP 导入重载。
 - 每小时可配置分钟的 ROA 定时更新；发现旧 update-roa 定时任务时拒绝创建重复任务。保留现有 `/etc/bird/update-roa.sh`，插件使用自己的更新入口。
+
+新建连接默认值页面可设置私钥、LLA、接口地址、AllowedIPs、MTU、端口、地址族和防火墙区域等，仅在新增连接时复制，不改变已有连接。
 
 ## 现有 BIRD 接入
 
@@ -33,9 +35,9 @@ iBGP 使用现有 `OWNAS`、`is_valid_network()`、`is_valid_network_v6()`、`dn
 
 ### GitHub Actions
 
-推送到 `main` / `master` 分支或手动运行 `Build OpenWrt package` workflow，会并行使用 OpenWrt 24.10.4 SDK 生成 IPK、OpenWrt 25.12.6 SDK 生成 APK。仅修改 `README.md` 时不触发自动构建。两种格式全部成功后发布到同一个新 Release，按北京时间生成 `v年.月.日.时分秒.RUN_ID.RUN_ATTEMPT` 标签，安装包使用相同时间版本；保留历史 Release。
+推送到 `main` / `master` 分支或手动运行 `Build OpenWrt package` workflow，会在同一个 runner 中使用 OpenWrt 24.10.4 SDK 生成 IPK、OpenWrt 25.12.6 SDK 生成 APK。仅修改 `README.md` 时不触发自动构建。两种格式全部成功后发布到同一个新 Release，按北京时间生成 `v年.月.日.时分秒.RUN_ID.RUN_ATTEMPT` 标签，安装包使用相同时间版本；保留历史 Release。
 
-Workflow 会缓存已准备好的 SDK、feeds 和依赖；命中缓存后直接复制当前源码并编译。需要刷新 SDK 或 feeds 时，递增 `.github/workflows/build.yml` 中的 `SDK_CACHE_VERSION`。每次构建的安装包也会保存在 Actions Artifacts 中。
+Workflow 只有一个 job，缓存两个完整 SDK、feeds 索引和构建工具。命中缓存后跳过下载和 feed 更新，只替换当前源码并打包本体。首次通过固定下载地址获取 SDK，失败自动重试，并校验 SHA256；系统开发包只在缺失时安装。需要刷新 SDK 或 feeds 时，递增 `.github/workflows/build.yml` 缓存 key 末尾的版本号。两种安装包一同保存在 Actions Artifacts 和同一个时间版本 Release 中。
 
 ### 本地 SDK 编译环境
 

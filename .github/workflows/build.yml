@@ -3,142 +3,47 @@ name: Build OpenWrt package
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
-    paths-ignore:
-      - "README.md"
+    branches: [main, master]
+    paths-ignore: [README.md]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: openwrt-package-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  version:
-    runs-on: ubuntu-24.04
-    outputs:
-      package_version: ${{ steps.version.outputs.package_version }}
-      tag: ${{ steps.version.outputs.tag }}
-    steps:
-      - name: Generate time-based version
-        id: version
-        run: |
-          timestamp="$(TZ=Asia/Shanghai date +'%Y.%m.%d.%H%M%S')"
-          version="${timestamp}.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
-          echo "package_version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-
   build:
-    needs: version
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - release: 24.10.4
-            format: ipk
-          - release: 25.12.6
-            format: apk
-    name: Build ${{ matrix.format }} (OpenWrt ${{ matrix.release }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      OPENWRT_RELEASE: ${{ matrix.release }}
-      PACKAGE_FORMAT: ${{ matrix.format }}
-      PACKAGE_VERSION: ${{ needs.version.outputs.package_version }}
-      OPENWRT_TARGET: x86/64
-      # Bump to rebuild the SDK and refresh all feeds.
-      SDK_CACHE_VERSION: 2
-
     steps:
-      - name: Checkout package source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Restore SDKs, feeds and build tools
+        uses: actions/cache@v4
         with:
-          path: package-source
+          path: .cache/openwrt-ci
+          # Bump to refresh SDKs and feeds. Package source is replaced every run.
+          key: openwrt-package-sdk-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-24.10.4-25.12.6-v3
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk gettext git \
-            libncurses-dev libssl-dev python3-setuptools rsync unzip \
-            zlib1g-dev file wget zstd
+      - name: Build IPK and APK (package only)
+        id: build
+        run: bash scripts/ci-build.sh
 
-      - name: Restore prepared OpenWrt SDK
-        id: sdk-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: openwrt-sdk
-          key: openwrt-sdk-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OPENWRT_RELEASE }}-${{ env.OPENWRT_TARGET }}-v${{ env.SDK_CACHE_VERSION }}
-
-      - name: Download OpenWrt SDK
-        if: steps.sdk-cache.outputs.cache-hit != 'true'
-        run: |
-          base_url="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}"
-          sdk_file="$(wget -qO- "${base_url}/" \
-            | grep -oE 'openwrt-sdk-[^" ]+\.tar\.zst' \
-            | head -n1)"
-          test -n "$sdk_file"
-          wget -q --show-progress "${base_url}/${sdk_file}"
-          mkdir openwrt-sdk
-          tar --zstd -xf "$sdk_file" -C openwrt-sdk --strip-components=1
-
-      - name: Prepare LuCI feed and dependencies
-        if: steps.sdk-cache.outputs.cache-hit != 'true'
-        working-directory: openwrt-sdk
-        run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install luci-base luci-lib-jsonc lua libuci-lua curl wireguard-tools
-
-      - name: Save prepared OpenWrt SDK
-        if: steps.sdk-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: openwrt-sdk
-          key: ${{ steps.sdk-cache.outputs.cache-primary-key }}
-
-      - name: Build luci-app-dn42
-        working-directory: openwrt-sdk
-        run: SDK_PREPARED=1 JOBS="$(nproc)" sh ../package-source/scripts/sdk-build.sh ../package-source
-
-      - name: Collect package
-        run: |
-          mkdir -p artifacts
-          find openwrt-sdk/bin/packages -type f \
-            -name "luci-app-dn42*.${PACKAGE_FORMAT}" \
-            -exec cp -v {} artifacts/ \;
-          test -n "$(find artifacts -type f -print -quit)"
-
-      - name: Upload build artifacts
+      - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-dn42-${{ matrix.format }}-${{ needs.version.outputs.tag }}
+          name: luci-app-dn42-${{ steps.build.outputs.tag }}
           path: artifacts/*
           if-no-files-found: error
-
-  release:
-    needs: [version, build]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Download both package formats
-        uses: actions/download-artifact@v4
-        with:
-          pattern: luci-app-dn42-*-${{ needs.version.outputs.tag }}
-          path: artifacts
-          merge-multiple: true
 
       - name: Publish time-based release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          RELEASE_TAG: ${{ steps.build.outputs.tag }}
         run: |
-          test -n "$(find artifacts -type f -name '*.ipk' -print -quit)"
-          test -n "$(find artifacts -type f -name '*.apk' -print -quit)"
           gh release create "$RELEASE_TAG" artifacts/* \
             --target "$GITHUB_SHA" \
             --title "$RELEASE_TAG" \

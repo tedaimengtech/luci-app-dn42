@@ -9,9 +9,11 @@ for tool in python3 lua luac node; do
     }
 done
 luac -p root/usr/libexec/rpcd/luci.dn42
-for file in htdocs/luci-static/resources/view/dn42/*.js; do
+for file in htdocs/luci-static/resources/view/dn42/*.js htdocs/luci-static/resources/dn42/*.js; do
     node --check "$file"
 done
+node tests/test_status.js
+node tests/test_defaults.js
 for file in root/usr/libexec/dn42/* scripts/*.sh; do
     sh -n "$file"
 done

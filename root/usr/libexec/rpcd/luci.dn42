@@ -70,15 +70,18 @@ local function apply(name,dryrun)
  if not ok then rollback();error(err) end
  return {ok=true,message='连接已应用。使用现有模板；端点不可达不会自动回滚。'}
 end
-local methods={route={prefix='string'},diagnose={name='string'},status={},detail={name='string'},apply={name='string'},preview={name='string'},remove={name='string'},roa={},schedule={},action={name='string',operation='string'}}
-if arg[1]=='list' then print(json.stringify(methods));os.exit() end
+local methods={interface_routes={name='string'},route={prefix='string'},diagnose={name='string'},status={},detail={name='string'},apply={name='string'},preview={name='string'},remove={name='string'},roa={},schedule={},action={name='string',operation='string'}}
+-- rpcd requires an object for each method signature, including no-argument methods.
+if arg[1]=='list' then local signatures=json.stringify(methods):gsub('%[%]','{}');print(signatures);os.exit() end
 if arg[1]~='call' or not methods[arg[2]] then os.exit(1) end
 local input=json.parse(io.read('*a')) or {};local method=arg[2]
 local function dispatch()
  if method=='route' then
  local prefix=input.prefix;assert(type(prefix)=='string' and prefix:match('^[%x:%.]+/%d+$') and #prefix<80,'输入完整 IPv4/IPv6 前缀');local out,ok=run('birdc show route for '..quote(prefix)..' all');return {ok=ok,message=out}
+ elseif method=='interface_routes' then
+ local p=peer(input.name);local v4,ok4=run('ip -4 route show table all dev '..quote(p.iface));local v6,ok6=run('ip -6 route show table all dev '..quote(p.iface));return {ok=ok4 and ok6,ipv4=v4,ipv6=v6,message=not(ok4 and ok6) and (v4..'\n'..v6) or nil}
  elseif method=='diagnose' then local p=peer(input.name);return {ok=true,message=run('ip -6 addr show dev '..quote(p.iface))..'\n'..run('ping -6 -I '..quote(p.iface)..' -c 2 -W 2 '..quote(p.remote_lla))}
- elseif method=='status' then local r={protocols=protocols(),roa=read('/etc/bird/.dn42-roa-last') or '尚无更新记录',roa_log=(read('/tmp/dn42-roa-result') or '')..'\n'..run('tail -n 30 /tmp/dn42-roa.log'),peers={}};uci:foreach('dn42','peer',function(p) r.peers[#r.peers+1]={name=p['.name'],asn=p.asn,label=p.label,iface=p.iface,wg=id(p.iface) and wg(p.iface) or '无效接口'} end);return r
+ elseif method=='status' then local r={protocols=protocols(),roa=read('/etc/bird/.dn42-roa-last') or '尚无更新记录',roa_log=(read('/tmp/dn42-roa-result') or '')..'\n'..(read('/tmp/dn42-roa.log') and run('tail -n 30 /tmp/dn42-roa.log') or ''),peers={}};uci:foreach('dn42','peer',function(p) r.peers[#r.peers+1]={name=p['.name'],asn=p.asn,label=p.label,iface=p.iface,kind=p.kind,transit=p.transit,ipv4=p.ipv4,ipv6=p.ipv6,zone=p.zone,listen_zone=p.listen_zone,rr_client=p.rr_client,template=p.kind=='ebgp' and uci:get('dn42','settings',p.transit=='1' and 'transit_template' or 'normal_template') or nil,wg=id(p.iface) and wg(p.iface) or '无效接口'} end);return r
  elseif method=='detail' then local p=peer(input.name);return {bgp=run('birdc show protocols all '..quote('dn42_'..input.name)),wg=wg(p.iface)}
  elseif method=='preview' then return apply(input.name,true)
  elseif method=='remove' then
@@ -100,6 +103,6 @@ local function dispatch()
 end
 -- Serialize all mutations; status remains available during downloads.
 local locked=false
-if method~='status' and method~='detail' and method~='preview' and method~='route' and method~='diagnose' then local _,ok=run('mkdir /var/lock/dn42-luci');if not ok then print(json.stringify({ok=false,message='另一项操作正在运行'}));os.exit() end;locked=true end
+if method~='interface_routes' and method~='status' and method~='detail' and method~='preview' and method~='route' and method~='diagnose' then local _,ok=run('mkdir /var/lock/dn42-luci');if not ok then print(json.stringify({ok=false,message='另一项操作正在运行'}));os.exit() end;locked=true end
 local ok,result=pcall(dispatch);if locked then run('rmdir /var/lock/dn42-luci') end
 print(json.stringify(ok and result or {ok=false,message=tostring(result)}))
