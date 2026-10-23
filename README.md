@@ -35,6 +35,8 @@ iBGP 使用现有 `OWNAS`、`is_valid_network()`、`is_valid_network_v6()`、`dn
 
 推送到 `main` / `master` 分支、推送 `v*` 标签或手动运行 `Build OpenWrt package` workflow，即可使用 OpenWrt 24.10.4 的 x86/64 SDK 编译插件。仅修改 `README.md` 时不触发自动构建。构建成功后，安装包会上传到仓库的 `latest` Release，并覆盖同名文件。
 
+Workflow 会缓存已准备好的 SDK、feeds 和依赖；命中缓存后直接复制当前源码并编译。需要刷新 SDK 或 feeds 时，递增 `.github/workflows/build.yml` 中的 `SDK_CACHE_VERSION`。每次构建的安装包也会保存在 Actions Artifacts 中。
+
 ### 最简 SDK 编译环境
 
 使用 [OpenWrt 官方 SDK 容器](https://github.com/openwrt/docker)，只构建插件包，不编译整套固件。需要已启动的 Linux Docker 服务；macOS / Windows 可使用 Docker Desktop，Apple Silicon 通过 `linux/amd64` 模拟运行 SDK。

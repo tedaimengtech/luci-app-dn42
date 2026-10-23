@@ -11,8 +11,11 @@ fi
     echo 'Run sdk-build.sh from the root of an OpenWrt SDK.' >&2
     exit 1
 }
-./scripts/feeds update -a
-package=feeds/luci/applications/luci-app-dn42
+if [ "${SDK_PREPARED:-0}" != 1 ]; then
+    ./scripts/feeds update -a
+    ./scripts/feeds install luci-base luci-lib-jsonc lua libuci-lua curl wireguard-tools
+fi
+package=package/luci-app-dn42
 [ ! -e "$package" ] || {
     echo "Package already exists: $package (use a disposable SDK)." >&2
     exit 1
@@ -21,8 +24,10 @@ mkdir -p "$package"
 # Do not copy tests, local caches, or compiled output into the SDK.
 cp "$source_dir/Makefile" "$source_dir/LICENSE" "$package/"
 cp -R "$source_dir/root" "$source_dir/htdocs" "$package/"
-./scripts/feeds update -i luci
-./scripts/feeds install luci-app-dn42
+# Register the local package directly; it is not part of the upstream feed index.
+# The source Makefile normally lives under feeds/luci/applications/.
+sed 's@include ../../luci.mk@include $(TOPDIR)/feeds/luci/luci.mk@' \
+    "$source_dir/Makefile" > "$package/Makefile"
 touch .config
 sed '/^CONFIG_ALL[=_]/d; /^# CONFIG_ALL[ _]/d; /^CONFIG_PACKAGE_luci-app-dn42=/d; /^# CONFIG_PACKAGE_luci-app-dn42 is not set$/d' .config > .config.dn42
 cat >> .config.dn42 <<'EOF'

@@ -12,16 +12,24 @@ on:
       - "README.md"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: openwrt-package-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: write
 
     env:
       OPENWRT_RELEASE: 24.10.4
       OPENWRT_TARGET: x86/64
+      # Bump to rebuild the SDK and refresh all feeds.
+      SDK_CACHE_VERSION: 1
 
     steps:
       - name: Checkout package source
@@ -37,7 +45,15 @@ jobs:
             libncurses-dev libssl-dev python3-setuptools rsync unzip \
             zlib1g-dev file wget zstd
 
+      - name: Restore prepared OpenWrt SDK
+        id: sdk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: openwrt-sdk
+          key: openwrt-sdk-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OPENWRT_RELEASE }}-${{ env.OPENWRT_TARGET }}-v${{ env.SDK_CACHE_VERSION }}
+
       - name: Download OpenWrt SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         run: |
           base_url="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}"
           sdk_file="$(wget -qO- "${base_url}/" \
@@ -48,9 +64,23 @@ jobs:
           mkdir openwrt-sdk
           tar --zstd -xf "$sdk_file" -C openwrt-sdk --strip-components=1
 
+      - name: Prepare LuCI feed and dependencies
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        working-directory: openwrt-sdk
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install luci-base luci-lib-jsonc lua libuci-lua curl wireguard-tools
+
+      - name: Save prepared OpenWrt SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: openwrt-sdk
+          key: ${{ steps.sdk-cache.outputs.cache-primary-key }}
+
       - name: Build luci-app-dn42
         working-directory: openwrt-sdk
-        run: JOBS="$(nproc)" sh ../package-source/scripts/sdk-build.sh ../package-source
+        run: SDK_PREPARED=1 JOBS="$(nproc)" sh ../package-source/scripts/sdk-build.sh ../package-source
 
       - name: Collect package
         run: |
@@ -59,6 +89,13 @@ jobs:
             \( -name 'luci-app-dn42_*.ipk' -o -name 'luci-app-dn42-*.apk' \) \
             -exec cp -v {} artifacts/ \;
           test -n "$(find artifacts -type f -print -quit)"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-dn42-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/*
+          if-no-files-found: error
 
       - name: Publish package to latest release
         env:
