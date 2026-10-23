@@ -16,11 +16,15 @@ if [ "${SDK_PREPARED:-0}" != 1 ]; then
     ./scripts/feeds install luci-base luci-lib-jsonc lua libuci-lua curl wireguard-tools
 fi
 package=package/luci-app-dn42
-[ ! -e "$package" ] || {
-    echo "Package already exists: $package (use a disposable SDK)." >&2
-    exit 1
-}
+if [ -e "$package" ]; then
+    [ -f "$package/.dn42-local-source" ] || {
+        echo "Refusing to replace unmanaged package: $package" >&2
+        exit 1
+    }
+    rm -rf "$package"
+fi
 mkdir -p "$package"
+touch "$package/.dn42-local-source"
 # Do not copy tests, local caches, or compiled output into the SDK.
 cp "$source_dir/Makefile" "$source_dir/LICENSE" "$package/"
 cp -R "$source_dir/root" "$source_dir/htdocs" "$package/"
@@ -38,8 +42,11 @@ CONFIG_PACKAGE_luci-app-dn42=m
 EOF
 mv .config.dn42 .config
 make defconfig
-grep -q '^CONFIG_PACKAGE_luci-app-dn42=m$' .config || {
-    echo 'luci-app-dn42 was not selected; check feed/dependency errors above.' >&2
+# Both built-in (y) and module (m) selections produce an SDK package.
+grep -Eq '^CONFIG_PACKAGE_luci-app-dn42=[my]$' .config || {
+    echo 'luci-app-dn42 was not selected; package configuration follows:' >&2
+    grep -n -A 20 -B 2 'config PACKAGE_luci-app-dn42$' tmp/.config-package.in >&2 || true
+    grep -E 'luci-app-dn42|^CONFIG_(MODULES|ALL|ALL_NONSHARED|ALL_KMODS)=' .config >&2 || true
     exit 1
 }
 make -j"$jobs" package/luci-app-dn42/compile V=s

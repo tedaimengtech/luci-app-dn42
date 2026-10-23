@@ -9,3 +9,5 @@ define Package/luci-app-dn42/conffiles
 endef
 
 include ../../luci.mk
+
+# call BuildPackage - OpenWrt buildroot signature

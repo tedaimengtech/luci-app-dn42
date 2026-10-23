@@ -37,24 +37,17 @@ iBGP 使用现有 `OWNAS`、`is_valid_network()`、`is_valid_network_v6()`、`dn
 
 Workflow 会缓存已准备好的 SDK、feeds 和依赖；命中缓存后直接复制当前源码并编译。需要刷新 SDK 或 feeds 时，递增 `.github/workflows/build.yml` 中的 `SDK_CACHE_VERSION`。每次构建的安装包也会保存在 Actions Artifacts 中。
 
-### 最简 SDK 编译环境
+### 本地 SDK 编译环境
 
-使用 [OpenWrt 官方 SDK 容器](https://github.com/openwrt/docker)，只构建插件包，不编译整套固件。需要已启动的 Linux Docker 服务；macOS / Windows 可使用 Docker Desktop，Apple Silicon 通过 `linux/amd64` 模拟运行 SDK。
+使用 OpenWrt 官方 Linux SDK，只编译插件包。默认将 SDK、feeds、下载缓存和编译产物放在项目同级的 `../openwrt/`（本机为 `/home/tedaimeng/CLionProjects/openwrt/`）。
 
 ```sh
-./scripts/check.sh
 ./scripts/build-openwrt.sh
 ```
 
-默认使用 `openwrt/sdk:x86-64-24.10.4`，作为编译检查基线。安装到设备前请选用与设备版本、目标平台一致的 SDK，例如：
+首次运行下载 OpenWrt 24.10.4 x86/64 SDK 并准备 feeds，后续复用。使用 `OPENWRT_DIR` 可指定其他专用 SDK 目录。构建需要 OpenWrt SDK 所需的本机开发工具与库。切换 SDK 版本或目标时应使用独立目录。
 
-```sh
-SDK_IMAGE=openwrt/sdk:mediatek-filogic-24.10.4 JOBS=2 ./scripts/build-openwrt.sh
-```
-
-产物放在 `bin/<镜像名>/packages/` 下，下载缓存位于 `.cache/openwrt/<镜像名>/`。容器退出即删除，首次运行需联网下载 SDK、feeds 和构建依赖。源码以只读方式挂载，编译在容器的 Linux 文件系统中完成。SDK 镜像和 Docker 服务需自行安装；脚本检测到缺失会直接报错。
-
-已有 Linux SDK 时，也可在其根目录执行 `sh /源码绝对路径/scripts/sdk-build.sh /源码绝对路径`。此操作会更新 feeds 和 `.config`，应使用专用 SDK 目录。
+安装包位于 `../openwrt/bin/packages/`。修改源码后再次运行脚本，会更新 SDK 内的插件源码并重新编译。
 
 ### 手动构建
 
